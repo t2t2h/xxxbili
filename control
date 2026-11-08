@@ -1,0 +1,8 @@
+Package: com.aflatoon.domainsniffer
+Name: DomainSniffer
+Version: 2.8.0
+Architecture: iphoneos-arm
+Description: Standalone domain/IP monitor with NextDNS blocking and replace rules. (c) Aflatoon
+Maintainer: Aflatoon
+Author: Aflatoon
+Section: Tweaks
