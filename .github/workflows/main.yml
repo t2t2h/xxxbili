@@ -1,0 +1,94 @@
+name: Build DomainSniffer
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate project folder
+        run: |
+          F=$(find . -name Tweak.xm -not -path './.theos/*' -not -path './.git/*' | head -1)
+          if [ -z "$F" ]; then
+            echo "::error::Tweak.xm not found in the repository. Upload the project files (Tweak.xm, Makefile, control) to the repo."
+            find . -maxdepth 3 -not -path './.git/*' | head -50
+            exit 1
+          fi
+          D=$(dirname "$F")
+          echo "PROJECT_DIR=$D" >> "$GITHUB_ENV"
+          echo "Project folder: $D"
+          ls -la "$D"
+
+      - name: Install tools
+        run: |
+          brew install ldid dpkg make || true
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Install Theos
+        run: |
+          git clone --recursive --depth=1 https://github.com/theos/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+
+      - name: Install iOS SDK
+        run: |
+          mkdir -p "$HOME/theos/sdks"
+          git clone --depth=1 https://github.com/theos/sdks.git /tmp/sdks
+          mv /tmp/sdks/*.sdk "$HOME/theos/sdks/" || true
+          ls "$HOME/theos/sdks"
+
+      - name: Build dylib
+        id: build
+        continue-on-error: true
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -o pipefail
+          make clean || true
+          make FINALPACKAGE=1 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Package deb (optional)
+        continue-on-error: true
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: make package FINALPACKAGE=1 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+
+      - name: Collect output
+        if: always()
+        run: |
+          mkdir -p out
+          [ -f build.log ] && cp build.log out/ || true
+          find "$PROJECT_DIR" -name "DomainSniffer.dylib" -not -path "*/arm64/*" -exec cp {} out/ \; || true
+          find "$PROJECT_DIR/packages" -name "*.deb" -exec cp {} out/ \; 2>/dev/null || true
+          ls -la out
+
+      - name: Verify standalone (no Substrate dependency)
+        run: |
+          if [ -f out/DomainSniffer.dylib ]; then
+            otool -L out/DomainSniffer.dylib
+            if otool -L out/DomainSniffer.dylib | grep -qi "substrate\|ellekit"; then
+              echo "::error::dylib still depends on Substrate/ElleKit"; exit 1
+            fi
+            echo "OK: standalone dylib"
+          fi
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DomainSniffer
+          path: out/*
+          if-no-files-found: error
+
+      - name: Fail if dylib missing
+        run: |
+          if [ ! -f out/DomainSniffer.dylib ]; then
+            echo "::error::dylib was not built. Open build.log (Artifacts) or the 'Build dylib' step for the error."
+            grep -n "error" out/build.log | head -30 || true
+            exit 1
+          fi
